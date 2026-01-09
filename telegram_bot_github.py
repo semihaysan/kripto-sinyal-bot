@@ -90,10 +90,9 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """Bybit'ten veri cek (GitHub Actions icin)."""
-    exchange = ccxt.bybit({
-        'enableRateLimit': True,
-        'options': {'defaultType': 'linear'}
+    """KuCoin'den veri cek (GitHub Actions icin)."""
+    exchange = ccxt.kucoin({
+        'enableRateLimit': True
     })
     
     try:
@@ -307,5 +306,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
