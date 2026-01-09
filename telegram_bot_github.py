@@ -90,8 +90,11 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """Binance'den veri cek."""
-    exchange = ccxt.binance({'enableRateLimit': True})
+    """Bybit'ten veri cek (GitHub Actions icin)."""
+    exchange = ccxt.bybit({
+        'enableRateLimit': True,
+        'options': {'defaultType': 'linear'}
+    })
     
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -304,4 +307,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
