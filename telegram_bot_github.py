@@ -19,26 +19,29 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # =====================================================
-# SİNYAL AYARLARI
+# SINYAL AYARLARI (HIGH PROFIT OPTIMIZED)
 # =====================================================
 SYMBOLS = ['ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT']
-MIN_STRENGTH = 40
+MIN_STRENGTH = 70  # Guclu sinyaller (daha fazla firsat)
 
 # Timeframes
-TF_TREND = '1h'
-TF_MOMENTUM = '30m'
-TF_ENTRY = '15m'
+TF_TREND = '4h'    # Trend icin 4 saatlik
+TF_MOMENTUM = '1h' # Momentum icin 1 saatlik  
+TF_ENTRY = '1h'    # Giris icin 1 saatlik
 
-# Strateji parametreleri
+# Strateji parametreleri (HIGH PROFIT)
 PARAMS = {
     'entry_bb_period': 20,
     'entry_bb_std': 2.0,
-    'entry_rsi_long_max': 60,
-    'entry_rsi_short_min': 40,
-    'volume_spike_min': 1.0,
-    'sl_atr_mult': 2.0,
-    'tp_atr_mult': 3.0,
+    'entry_rsi_long_max': 58,    # Biraz gevsetildi
+    'entry_rsi_short_min': 42,   # Biraz gevsetildi
+    'volume_spike_min': 1.0,     # Normal volume yeterli
+    'sl_atr_mult': 1.5,          # Siki SL
+    'tp_atr_mult': 4.0,          # Genis TP - R:R = 2.67:1
 }
+
+# KALDIRAC - 5x (karlilik icin optimize)
+FIXED_LEVERAGE = 5
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s')
@@ -90,7 +93,8 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """KuCoin'den veri cek (GitHub Actions icin)."""
+    """KuCoin'den veri cek (GitHub Actions icin - global erisim)."""
+    # KuCoin spot kullan (ABD'den erisilebilir)
     exchange = ccxt.kucoin({
         'enableRateLimit': True
     })
@@ -107,9 +111,9 @@ def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
 
 
 def get_btc_trend() -> int:
-    """BTC trend yonu. 1=up, -1=down, 0=neutral"""
+    """BTC trend yonu (4h bazli). 1=up, -1=down, 0=neutral"""
     try:
-        df = fetch_data('BTC/USDT', TF_TREND, 100)
+        df = fetch_data('BTC/USDT', TF_TREND, 100)  # 4h
         if df.empty:
             return 0
         df = calculate_indicators(df)
@@ -124,45 +128,42 @@ def get_btc_trend() -> int:
 
 
 def check_signal(symbol: str, btc_trend: int) -> dict:
-    """Sinyal kontrol et."""
+    """Sinyal kontrol et (Optimized 1h entry)."""
     try:
-        df_1h = fetch_data(symbol, TF_TREND, 100)
-        df_30m = fetch_data(symbol, TF_MOMENTUM, 100)
-        df_15m = fetch_data(symbol, TF_ENTRY, 100)
+        df_4h = fetch_data(symbol, TF_TREND, 100)    # 4h trend
+        df_1h = fetch_data(symbol, TF_ENTRY, 100)    # 1h entry ve momentum
         
-        if df_1h.empty or df_30m.empty or df_15m.empty:
+        if df_4h.empty or df_1h.empty:
             return None
         
+        df_4h = calculate_indicators(df_4h)
         df_1h = calculate_indicators(df_1h)
-        df_30m = calculate_indicators(df_30m)
-        df_15m = calculate_indicators(df_15m)
         
-        bar_1h = df_1h.iloc[-1]
-        bar_30m = df_30m.iloc[-1]
-        bar_15m = df_15m.iloc[-1]
+        bar_4h = df_4h.iloc[-1]  # Trend
+        bar_1h = df_1h.iloc[-1]  # Entry ve Momentum
         
-        # 1H Trend
-        trend_up = (bar_1h['close'] > bar_1h['ema_50']) and (bar_1h['macd_hist'] > 0)
-        trend_down = (bar_1h['close'] < bar_1h['ema_50']) and (bar_1h['macd_hist'] < 0)
+        # 4H Trend
+        trend_up = (bar_4h['close'] > bar_4h['ema_50']) and (bar_4h['macd_hist'] > 0)
+        trend_down = (bar_4h['close'] < bar_4h['ema_50']) and (bar_4h['macd_hist'] < 0)
         
-        # 30m Momentum
-        mom_up = (bar_30m['ema_9'] > bar_30m['ema_21']) and (bar_30m['macd_hist'] > 0)
-        mom_down = (bar_30m['ema_9'] < bar_30m['ema_21']) and (bar_30m['macd_hist'] < 0)
+        # 1h Momentum
+        mom_up = (bar_1h['ema_9'] > bar_1h['ema_21']) and (bar_1h['macd_hist'] > 0)
+        mom_down = (bar_1h['ema_9'] < bar_1h['ema_21']) and (bar_1h['macd_hist'] < 0)
         
-        # 15m Entry
-        rsi_long = bar_15m['rsi'] < PARAMS['entry_rsi_long_max']
-        rsi_short = bar_15m['rsi'] > PARAMS['entry_rsi_short_min']
-        bb_long = bar_15m['bb_pct'] < 0.6
-        bb_short = bar_15m['bb_pct'] > 0.4
-        volume_ok = bar_15m['volume_ratio'] >= PARAMS['volume_spike_min']
+        # 1h Entry
+        rsi_long = bar_1h['rsi'] < PARAMS['entry_rsi_long_max']
+        rsi_short = bar_1h['rsi'] > PARAMS['entry_rsi_short_min']
+        bb_long = bar_1h['bb_pct'] < 0.6
+        bb_short = bar_1h['bb_pct'] > 0.4
+        volume_ok = bar_1h['volume_ratio'] >= PARAMS['volume_spike_min']
         
         signal = None
         
-        # LONG
+        # LONG (backtest stratejisi ile AYNI)
         if trend_up and (mom_up or bar_1h['macd_hist'] > 0) and rsi_long and bb_long and volume_ok:
             if btc_trend >= 0:
                 signal = 'LONG'
-        # SHORT
+        # SHORT (backtest stratejisi ile AYNI)
         elif trend_down and (mom_down or bar_1h['macd_hist'] < 0) and rsi_short and bb_short and volume_ok:
             if btc_trend <= 0:
                 signal = 'SHORT'
@@ -170,44 +171,40 @@ def check_signal(symbol: str, btc_trend: int) -> dict:
         if not signal:
             return None
         
-        # Sinyal kuvveti
+        # Sinyal kuvveti (backtest stratejisi ile AYNI)
         strength = 0
         if signal == 'LONG':
             if trend_up: strength += 30
             if mom_up: strength += 20
-            if bar_15m['macd_hist'] > 0: strength += 15
-            if bar_15m['volume_ratio'] >= 1.5: strength += 15
-            elif bar_15m['volume_ratio'] >= 1.2: strength += 10
-            if 30 <= bar_15m['rsi'] <= 50: strength += 10
-            elif 25 <= bar_15m['rsi'] <= 55: strength += 5
-            if bar_15m['bb_pct'] < 0.3: strength += 10
-            elif bar_15m['bb_pct'] < 0.5: strength += 5
+            if bar_1h['macd_hist'] > 0: strength += 15
+            if bar_1h['volume_ratio'] >= 1.5: strength += 15
+            elif bar_1h['volume_ratio'] >= 1.2: strength += 10
+            if 30 <= bar_1h['rsi'] <= 50: strength += 10
+            elif 25 <= bar_1h['rsi'] <= 55: strength += 5
+            if bar_1h['bb_pct'] < 0.3: strength += 10
+            elif bar_1h['bb_pct'] < 0.5: strength += 5
         else:
             if trend_down: strength += 30
             if mom_down: strength += 20
-            if bar_15m['macd_hist'] < 0: strength += 15
-            if bar_15m['volume_ratio'] >= 1.5: strength += 15
-            elif bar_15m['volume_ratio'] >= 1.2: strength += 10
-            if 50 <= bar_15m['rsi'] <= 70: strength += 10
-            elif 45 <= bar_15m['rsi'] <= 75: strength += 5
-            if bar_15m['bb_pct'] > 0.7: strength += 10
-            elif bar_15m['bb_pct'] > 0.5: strength += 5
+            if bar_1h['macd_hist'] < 0: strength += 15
+            if bar_1h['volume_ratio'] >= 1.5: strength += 15
+            elif bar_1h['volume_ratio'] >= 1.2: strength += 10
+            if 50 <= bar_1h['rsi'] <= 70: strength += 10
+            elif 45 <= bar_1h['rsi'] <= 75: strength += 5
+            if bar_1h['bb_pct'] > 0.7: strength += 10
+            elif bar_1h['bb_pct'] > 0.5: strength += 5
         
         strength = min(strength, 100)
         
         if strength < MIN_STRENGTH:
             return None
         
-        # Kaldırac
-        if strength >= 85: leverage = 20
-        elif strength >= 70: leverage = 15
-        elif strength >= 55: leverage = 10
-        elif strength >= 40: leverage = 5
-        else: leverage = 3
+        # Kaldirac - SABIT 5x (dinamik cok riskli)
+        leverage = FIXED_LEVERAGE
         
-        # SL/TP
-        entry = bar_15m['close']
-        atr = bar_15m['atr']
+        # SL/TP (1h bar kullaniliyor)
+        entry = bar_1h['close']
+        atr = bar_1h['atr']
         
         if signal == 'LONG':
             sl = entry - (atr * PARAMS['sl_atr_mult'])
@@ -222,8 +219,8 @@ def check_signal(symbol: str, btc_trend: int) -> dict:
         return {
             'symbol': symbol, 'signal': signal, 'strength': strength,
             'leverage': leverage, 'entry': entry, 'sl': sl, 'tp': tp,
-            'sl_pct': sl_pct, 'tp_pct': tp_pct, 'rsi': bar_15m['rsi'],
-            'volume': bar_15m['volume_ratio'], 'btc_trend': btc_trend
+            'sl_pct': sl_pct, 'tp_pct': tp_pct, 'rsi': bar_1h['rsi'],
+            'volume': bar_1h['volume_ratio'], 'btc_trend': btc_trend
         }
     except Exception as e:
         logger.error(f"Hata {symbol}: {e}")
@@ -234,20 +231,12 @@ def format_message(s: dict) -> str:
     """Telegram mesaji formatla."""
     emoji = "🟢" if s['signal'] == 'LONG' else "🔴"
     
-    if s['strength'] >= 85: str_emoji, str_txt = "🔥", "Cok Guclu"
-    elif s['strength'] >= 70: str_emoji, str_txt = "⚡", "Guclu"
-    elif s['strength'] >= 55: str_emoji, str_txt = "💪", "Iyi"
-    else: str_emoji, str_txt = "📊", "Normal"
-    
     if s['btc_trend'] == 1: btc = "⬆️ Yukari"
     elif s['btc_trend'] == -1: btc = "⬇️ Asagi"
     else: btc = "➡️ Notr"
     
     return f"""
 {emoji} *{s['signal']} SINYALI* - {s['symbol']}
-
-📊 *Kuvvet:* {s['strength']}/100 {str_emoji} ({str_txt})
-💪 *Kaldirac:* {s['leverage']}x
 
 💰 *Entry:* ${s['entry']:.4f}
 🛑 *Stop-Loss:* ${s['sl']:.4f} (-{s['sl_pct']:.1f}%)
@@ -257,7 +246,7 @@ def format_message(s: dict) -> str:
 📊 *Volume:* {s['volume']:.1f}x
 ₿ *BTC:* {btc}
 
-⏱ *TF:* 15m | 🕐 {datetime.now().strftime('%H:%M')} UTC
+⏱ *TF:* 1h | 🕐 {datetime.now().strftime('%H:%M')} UTC
 """
 
 
@@ -306,6 +295,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
 
