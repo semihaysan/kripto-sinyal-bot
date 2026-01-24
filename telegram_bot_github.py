@@ -19,10 +19,13 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # =====================================================
-# SINYAL AYARLARI (HIGH PROFIT OPTIMIZED)
+# SINYAL AYARLARI 
 # =====================================================
-SYMBOLS = ['ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT']
-MIN_STRENGTH = 60  # Guclu sinyaller (daha fazla firsat)
+SYMBOLS = [
+    'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT',
+    'POL/USDT', 'DOT/USDT', 'ATOM/USDT', 'XRP/USDT', 'LTC/USDT'  
+]
+MIN_STRENGTH = 65  # Backtest ile secildi
 
 # Timeframes
 TF_TREND = '4h'    # Trend icin 4 saatlik
@@ -42,6 +45,9 @@ PARAMS = {
 
 # KALDIRAC - 5x (karlilik icin optimize)
 FIXED_LEVERAGE = 5
+
+# OTOMATIK TRADING AYARLARI
+AUTO_TRADE_ENABLED = os.environ.get('AUTO_TRADE_ENABLED', 'false').lower() == 'true'  # Güvenlik için varsayılan kapalı
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(message)s')
@@ -286,6 +292,20 @@ async def main():
         msg = format_message(sig)
         await send_message(msg)
         await asyncio.sleep(1)
+        
+        # Otomatik trading (eğer aktifse)
+        if AUTO_TRADE_ENABLED:
+            try:
+                from auto_trader import execute_auto_trade
+                logger.info(f"Otomatik trading aktif - {sig['symbol']} işlemi açılıyor...")
+                success = execute_auto_trade(sig)
+                if success:
+                    await send_message(f"✅ {sig['symbol']} {sig['signal']} pozisyonu otomatik olarak açıldı!")
+                else:
+                    await send_message(f"❌ {sig['symbol']} otomatik işlem açılamadı. Logları kontrol edin.")
+            except Exception as e:
+                logger.error(f"Otomatik trading hatası: {e}")
+                await send_message(f"⚠️ Otomatik trading hatası: {str(e)}")
     
     if not signals:
         logger.info("Sinyal bulunamadi")
@@ -295,6 +315,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
