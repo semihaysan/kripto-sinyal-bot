@@ -2,23 +2,30 @@ name: Kripto Sinyal Kontrolu
 
 on:
   schedule:
+    # Her 5 dakikada bir calistir (UTC) - GitHub Actions minimum 5 dakika
     - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch:  # Manuel calistirma
 
 jobs:
   check-signals:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
     
-    - uses: actions/setup-python@v5
+    - name: Python Kur
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
-    - run: pip install ccxt pandas python-telegram-bot
+    - name: Kutuphaneleri Kur
+      run: |
+        pip install ccxt pandas python-telegram-bot
     
-    - env:
+    - name: Sinyal Kontrol
+      env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: python telegram_bot_github.py
+      run: |
+        python telegram_bot_github.py
