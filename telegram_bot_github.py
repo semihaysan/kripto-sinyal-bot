@@ -22,7 +22,7 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 # SINYAL AYARLARI (HIGH PROFIT OPTIMIZED)
 # =====================================================
 SYMBOLS = ['ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT']
-MIN_STRENGTH = 70  # Guclu sinyaller (daha fazla firsat)
+MIN_STRENGTH = 60  # Guclu sinyaller (daha fazla firsat)
 
 # Timeframes
 TF_TREND = '4h'    # Trend icin 4 saatlik
@@ -295,5 +295,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
