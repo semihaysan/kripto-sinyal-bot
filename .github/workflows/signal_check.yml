@@ -2,8 +2,8 @@ name: Kripto Sinyal Kontrolu
 
 on:
   schedule:
-    # Her 5 dakikada bir calistir (UTC) - GitHub Actions minimum 5 dakika
-    - cron: '*/5 * * * *'
+    # Her 15 dakikada bir calistir (UTC)
+    - cron: '*/15 * * * *'
   workflow_dispatch:  # Manuel calistirma
 
 jobs:
@@ -27,5 +27,12 @@ jobs:
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        # Otomatik trade (KuCoin Futures) — sadece AUTO_TRADE_ENABLED=true ve API bilgileri dolu ise işlem açar
+        KUCOIN_API_KEY: ${{ secrets.KUCOIN_API_KEY }}
+        KUCOIN_API_SECRET: ${{ secrets.KUCOIN_API_SECRET }}
+        KUCOIN_API_PASSPHRASE: ${{ secrets.KUCOIN_API_PASSPHRASE }}
+        AUTO_TRADE_ENABLED: ${{ secrets.AUTO_TRADE_ENABLED }}
+        AUTO_TRADE_DRY_RUN: ${{ secrets.AUTO_TRADE_DRY_RUN }}
       run: |
         python telegram_bot_github.py
+
