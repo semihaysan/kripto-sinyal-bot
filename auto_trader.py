@@ -206,11 +206,22 @@ class AutoTrader:
             return False
 
         balance = self.get_account_balance()
-        if balance < 10:
-            logger.error(f"Yetersiz bakiye: ${balance:.2f}")
-            return False
+        # DRY_RUN'da gerçek bakiye 0 bile olsa "sanki bakiye varmış" gibi simülasyon yap.
+        # Canlı modda (DRY_RUN=false) ise bakiye koruması devam eder.
+        if AUTO_TRADE_DRY_RUN:
+            if balance < 10:
+                virtual_balance = 1000.0  # Sadece hesaplama için kullanılan sanal bakiye
+                logger.info(f"[DRY_RUN] Gerçek bakiye düşük (${balance:.2f}), sanal bakiye ${virtual_balance:.2f} ile simülasyon yapılacak.")
+                effective_balance = virtual_balance
+            else:
+                effective_balance = balance
+        else:
+            if balance < 10:
+                logger.error(f"Yetersiz bakiye: ${balance:.2f}")
+                return False
+            effective_balance = balance
 
-        quantity = self.calculate_position_size(entry, sl, balance)
+        quantity = self.calculate_position_size(entry, sl, effective_balance)
         if quantity <= 0:
             logger.error("Pozisyon büyüklüğü 0.")
             return False
