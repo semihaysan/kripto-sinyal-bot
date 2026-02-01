@@ -226,6 +226,14 @@ class AutoTrader:
             logger.error("Pozisyon büyüklüğü 0.")
             return False
 
+        # Margin rezervasyonu: gerekli margin kullanilabilir bakiyeyi asmasin (backtest ile uyumlu)
+        required_margin = quantity * entry / leverage
+        if required_margin > effective_balance:
+            logger.warning(
+                f"Yetersiz margin: {symbol} — gerekli ${required_margin:.2f}, kullanilabilir ${effective_balance:.2f}. Islem atlandi."
+            )
+            return False
+
         result = self.place_order(
             symbol=symbol, side=side,
             entry_price=entry, stop_loss=sl, take_profit=tp,
