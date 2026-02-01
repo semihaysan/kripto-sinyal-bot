@@ -23,7 +23,9 @@ jobs:
       run: |
         pip install ccxt pandas python-telegram-bot
     
+    # Test mesaji sadece manuel calistirmada gonderilir (cron'da spam olmasin)
     - name: Telegram Test (Bot Calisma Kontrolu)
+      if: github.event_name == 'workflow_dispatch'
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
