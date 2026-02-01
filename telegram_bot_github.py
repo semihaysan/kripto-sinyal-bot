@@ -23,9 +23,12 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 # =====================================================
 SYMBOLS = [
     'ETH/USDT', 'SOL/USDT', 'AVAX/USDT', 'LINK/USDT',
-    'POL/USDT', 'DOT/USDT', 'ATOM/USDT', 'XRP/USDT', 'LTC/USDT'  # POL = Polygon (eski MATIC)
+    'POL/USDT', 'DOT/USDT', 'ATOM/USDT', 'XRP/USDT', 'LTC/USDT',
+    # Ek coinler — daha fazla firsat (KuCoin'de likit)
+    'ADA/USDT', 'DOGE/USDT', 'UNI/USDT', 'NEAR/USDT', 'APT/USDT',
+    'ARB/USDT', 'OP/USDT', 'INJ/USDT', 'SUI/USDT', 'TIA/USDT',
 ]
-MIN_STRENGTH = 65  # Backtest ile secildi: daha fazla islem, makul risk (70: az sinyal, 60: kalite dusuyor)
+MIN_STRENGTH = 62  # 65'ten 62: biraz daha sinyal, kalite hala makul (60 alti gurultu artar)
 
 # Timeframes
 TF_TREND = '4h'    # Trend icin 4 saatlik
@@ -295,7 +298,7 @@ async def main():
         await send_message(msg)
         await asyncio.sleep(1)
         
-        # Otomatik trading (eğer aktifse)
+        # Otomatik trading (eğer aktifse). Margin kontrolü auto_trader içinde: gerekli margin > kullanilabilir bakiye ise islem atlanir.
         if AUTO_TRADE_ENABLED:
             try:
                 from auto_trader import execute_auto_trade
