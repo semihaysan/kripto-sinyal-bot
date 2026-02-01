@@ -2,8 +2,8 @@ name: Kripto Sinyal Kontrolu
 
 on:
   schedule:
-    # Her 15 dakikada bir calistir (UTC)
-    - cron: '*/15 * * * *'
+    # Her 5 dakikada bir calistir (UTC)
+    - cron: '*/5 * * * *'
   workflow_dispatch:  # Manuel calistirma
 
 jobs:
@@ -22,6 +22,11 @@ jobs:
     - name: Kutuphaneleri Kur
       run: |
         pip install ccxt pandas python-telegram-bot
+
+    # Cron gercek calisma saatini gormek icin (hedef: her 5 dk)
+    - name: Calisma Zamani (UTC)
+      run: |
+        echo "Workflow basladi: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
     
     # Test mesaji sadece manuel calistirmada gonderilir (cron'da spam olmasin)
     - name: Telegram Test (Bot Calisma Kontrolu)
