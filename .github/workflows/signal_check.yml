@@ -3,7 +3,7 @@ name: Kripto Sinyal Kontrolu
 on:
   schedule:
     # Her 5 dakikada bir calistir (UTC) — GitHub gecikme yapabilir, tam 5 dk garantisi yok
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch:  # Manuel calistirma
 
 # Ayni anda tek run: yeni tetiklenince onceki hala calisiyorsa iptal et (kuyruk birikmesin)
