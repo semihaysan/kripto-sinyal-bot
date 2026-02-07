@@ -2,38 +2,54 @@ name: Kripto Sinyal Kontrolu
 
 on:
   schedule:
-    # Her 5 dakikada bir calistir (UTC) — GitHub gecikme yapabilir, tam 5 dk garantisi yok
-    - cron: '*/10 * * * *'
-  workflow_dispatch:  # Manuel calistirma
-
-# Ayni anda tek run: yeni tetiklenince onceki hala calisiyorsa iptal et (kuyruk birikmesin)
-concurrency:
-  group: signal-check
-  cancel-in-progress: true
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
 
 jobs:
   check-signals:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    
+
     - name: Python Kur
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
     - name: Kutuphaneleri Kur
       run: |
         pip install ccxt pandas python-telegram-bot
 
-    # Cron gercek calisma saatini gormek icin (hedef: her 5 dk)
-    - name: Calisma Zamani (UTC)
+    - name: Son 1h mum timestamp (atla kontrolu)
+      id: last_1h
       run: |
-        echo "Workflow basladi: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
-    
-    # Test mesaji sadece manuel calistirmada gonderilir (cron'da spam olmasin)
+        echo "ts=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:00:00Z)" >> $GITHUB_OUTPUT
+        echo "Run UTC: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+
+    - name: Cache son 1h timestamp
+      uses: actions/cache/restore@v4
+      id: cache_1h
+      with:
+        path: .signal_check_cache
+        key: signal-check-last-1h
+
+    - name: Ayni 1h mum mu?
+      id: skip_run
+      run: |
+        if [ -f .signal_check_cache/last_1h_ts ]; then
+          PREV=$(cat .signal_check_cache/last_1h_ts)
+          if [ "$PREV" = "${{ steps.last_1h.outputs.ts }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Ayni 1h mum, sinyal kontrolu atlaniyor."
+            exit 0
+          fi
+        fi
+        echo "skip=false" >> $GITHUB_OUTPUT
+        mkdir -p .signal_check_cache
+        echo "${{ steps.last_1h.outputs.ts }}" > .signal_check_cache/last_1h_ts
+
     - name: Telegram Test (Bot Calisma Kontrolu)
       if: github.event_name == 'workflow_dispatch'
       env:
@@ -41,8 +57,9 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
         python test_telegram.py
-    
+
     - name: Sinyal Kontrol
+      if: steps.skip_run.outputs.skip != 'true'
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -56,3 +73,9 @@ jobs:
       run: |
         python telegram_bot_github.py
 
+    - name: Cache 1h timestamp kaydet
+      if: steps.skip_run.outputs.skip != 'true' && success()
+      uses: actions/cache/save@v4
+      with:
+        path: .signal_check_cache
+        key: signal-check-last-1h
