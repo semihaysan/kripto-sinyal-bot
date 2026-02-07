@@ -1,16 +1,25 @@
 """
 Telegram Bot - GitHub Actions versiyonu
-Her 15 dakikada bir sinyal kontrolü yapar.
+Schedule workflow'dan calistirilir (ornegin her 30 dk).
 """
 
 import asyncio
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import ccxt
 from telegram import Bot
 from telegram.error import TelegramError
+
+# KuCoin exchange tek sefer olusturulur (her fetch'te degil)
+_exchange = None
+
+def _get_exchange():
+    global _exchange
+    if _exchange is None:
+        _exchange = ccxt.kucoin({'enableRateLimit': True})
+    return _exchange
 
 # =====================================================
 # TELEGRAM AYARLARI (GitHub Secrets'tan)
@@ -104,14 +113,9 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """KuCoin'den veri cek (GitHub Actions icin - global erisim)."""
-    # KuCoin spot kullan (ABD'den erisilebilir)
-    exchange = ccxt.kucoin({
-        'enableRateLimit': True
-    })
-    
+    """KuCoin'den veri cek (global exchange kullanir)."""
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        ohlcv = _get_exchange().fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
@@ -122,9 +126,9 @@ def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
 
 
 def get_btc_trend() -> int:
-    """BTC trend yonu (4h bazli). 1=up, -1=down, 0=neutral"""
+    """BTC trend yonu (4h bazli). 1=up, -1=down, 0=neutral. Tek sefer cagrilir, veri bir kez cekilir."""
     try:
-        df = fetch_data('BTC/USDT', TF_TREND, 100)  # 4h
+        df = fetch_data('BTC/USDT', TF_TREND, 100)
         if df.empty:
             return 0
         df = calculate_indicators(df)
@@ -276,72 +280,87 @@ async def send_message(msg: str):
 
 async def main():
     """Ana fonksiyon."""
+    run_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     logger.info("="*40)
-    logger.info("SINYAL KONTROLU BASLADI")
+    logger.info("SINYAL KONTROLU BASLADI | Run UTC: %s", run_utc)
     logger.info("="*40)
-    
+
+    # BTC trend bir kez cekilir, tum semboller icin kullanilir
     btc_trend = get_btc_trend()
     btc_txt = "UP" if btc_trend == 1 else "DOWN" if btc_trend == -1 else "NEUTRAL"
-    logger.info(f"BTC Trend: {btc_txt}")
-    
+    logger.info("BTC Trend: %s", btc_txt)
+
     signals = []
     for symbol in SYMBOLS:
         sig = check_signal(symbol, btc_trend)
         if sig:
             signals.append(sig)
-            logger.info(f"  {symbol}: {sig['signal']} (Kuvvet: {sig['strength']})")
+            logger.info("  %s: %s (Kuvvet: %s)", symbol, sig['signal'], sig['strength'])
         else:
-            logger.info(f"  {symbol}: Sinyal yok")
-    
+            logger.info("  %s: Sinyal yok", symbol)
+
+    # Ayni sembol + ayni yon duplicate gonderilmesin
+    sent_key = set()
     for sig in signals:
+        key = (sig['symbol'], sig['signal'])
+        if key in sent_key:
+            logger.info("Duplicate atlandi: %s %s", sig['symbol'], sig['signal'])
+            continue
+        sent_key.add(key)
+
         msg = format_message(sig)
         await send_message(msg)
         await asyncio.sleep(1)
-        
-        # Otomatik trading (eğer aktifse). Margin kontrolü auto_trader içinde: gerekli margin > kullanilabilir bakiye ise islem atlanir.
+
         if AUTO_TRADE_ENABLED:
             try:
                 from auto_trader import execute_auto_trade
-                logger.info(f"Otomatik trading aktif - {sig['symbol']} işlemi açılıyor...")
+                logger.info("Otomatik trading aktif - %s islemi aciliyor...", sig['symbol'])
                 success = execute_auto_trade(sig)
                 if success:
                     if AUTO_TRADE_DRY_RUN:
-                        await send_message(f"🔸 [DRY RUN] {sig['symbol']} {sig['signal']} işlemi simüle edildi — emir gönderilmedi.")
+                        await send_message("🔸 [DRY RUN] %s %s islemi simule edildi." % (sig['symbol'], sig['signal']))
                     else:
-                        await send_message(f"✅ {sig['symbol']} {sig['signal']} pozisyonu otomatik olarak açıldı!")
+                        await send_message("✅ %s %s pozisyonu otomatik acildi!" % (sig['symbol'], sig['signal']))
                 else:
                     if AUTO_TRADE_DRY_RUN:
-                        await send_message(f"❌ [DRY RUN] {sig['symbol']} simüle işlem açılamadı (bakiye/pozisyon/limit vb.). Logları kontrol edin.")
+                        await send_message("❌ [DRY RUN] %s simule islem acilamadi." % sig['symbol'])
                     else:
-                        await send_message(f"❌ {sig['symbol']} otomatik işlem açılamadı. Logları kontrol edin.")
+                        await send_message("❌ %s otomatik islem acilamadi." % sig['symbol'])
+                await asyncio.sleep(1)
             except Exception as e:
-                logger.error(f"Otomatik trading hatası: {e}")
-                await send_message(f"⚠️ Otomatik trading hatası: {str(e)}")
-    
+                logger.error("Otomatik trading hatasi: %s", e)
+                await send_message("⚠️ Otomatik trading hatasi: %s" % str(e))
+                await asyncio.sleep(1)
+
     if not signals:
         logger.info("Sinyal bulunamadi")
-    
-    # TP/SL kapanış bildirimi — DRY_RUN'da da gelir (sadece okuma). KuCoin API key varsa, son ~16 dk.
+
+    # TP/SL kapanis bildirimi
     try:
         from auto_trader import get_recent_position_closes
         closes = get_recent_position_closes(SYMBOLS)
         for c in closes:
             ct = c.get('close_type')
             if ct == 'TP':
-                label = "TP'de kapandı"
+                label = "TP'de kapandi"
             elif ct == 'SL':
-                label = "SL'de kapandı"
+                label = "SL'de kapandi"
             else:
                 label = "TP veya SL"
             if c.get('trigger_price') is not None:
-                msg = f"🛑 *Pozisyon kapandı* — {c['symbol']} {c['side']} | *{label}*\nİşlem: ${c['close_price']:.4f} | Tetik: ${c['trigger_price']:.4f}"
+                msg = "*Pozisyon kapandi* — %s %s | %s | Islem: $%.4f | Tetik: $%.4f" % (
+                    c['symbol'], c['side'], label, c['close_price'], c['trigger_price'])
             else:
-                msg = f"🛑 *Pozisyon kapandı* — {c['symbol']} {c['side']} | *{label}*\nİşlem: ${c['close_price']:.4f}"
+                msg = "*Pozisyon kapandi* — %s %s | %s | Islem: $%.4f" % (c['symbol'], c['side'], label, c['close_price'])
             await send_message(msg)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
     except Exception as e:
-        logger.warning(f"Kapanış bildirimi atlandı: {e}")
-    
+        logger.warning("Kapanis bildirimi atlandi: %s", e)
+
+    # Bos sinyal run'inda Telegram'a mesaj yollanmaz (gunluk durum mesaji kaldirildi)
+    logger.info("="*40)
+    logger.info("SINYAL KONTROLU BITTI | Run UTC: %s", run_utc)
     logger.info("="*40)
 
 
