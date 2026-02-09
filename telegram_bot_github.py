@@ -47,7 +47,6 @@ MIN_STRENGTH = 62  # 65'ten 62: biraz daha sinyal, kalite hala makul (60 alti gu
 
 # Timeframes
 TF_TREND = '4h'    # Trend icin 4 saatlik
-TF_MOMENTUM = '1h' # Momentum icin 1 saatlik  
 TF_ENTRY = '1h'    # Giris icin 1 saatlik
 
 # Strateji parametreleri (HIGH PROFIT)
@@ -65,8 +64,7 @@ PARAMS = {
 FIXED_LEVERAGE = 5
 
 # OTOMATIK TRADING AYARLARI
-AUTO_TRADE_ENABLED = os.environ.get('AUTO_TRADE_ENABLED', 'false').lower() == 'true'  # Güvenlik için varsayılan kapalı
-# Sandbox yoksa: DRY_RUN=true — bağlanır, bakiye/pozisyon okur; emir GÖNDERMEZ. Telegram'da "simüle edildi" yazar.
+AUTO_TRADE_ENABLED = os.environ.get('AUTO_TRADE_ENABLED', 'false').lower() == 'true'
 AUTO_TRADE_DRY_RUN = os.environ.get('AUTO_TRADE_DRY_RUN', os.environ.get('DRY_RUN', 'false')).lower() == 'true'
 
 # Logging
@@ -119,7 +117,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """KuCoin'den veri cek (global exchange kullanir). ThreadPoolExecutor kullanmadan direkt cek (daha hizli)."""
+    """KuCoin'den veri cek (global exchange kullanir)."""
     try:
         exchange = _get_exchange()
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -167,7 +165,7 @@ def get_btc_trend() -> int:
 
 
 def check_signal(symbol: str, btc_trend: int) -> dict:
-    """Sinyal kontrol et (Optimized 1h entry). 4h ve 1h verileri paralel cekilir."""
+    """Sinyal kontrol et. 4h ve 1h verileri paralel cekilir."""
     try:
         # Paralel fetch: 4h ve 1h ayni anda
         exchange = _get_exchange()
@@ -272,11 +270,15 @@ def check_signal(symbol: str, btc_trend: int) -> dict:
         sl_pct = abs(sl - entry) / entry * 100
         tp_pct = abs(tp - entry) / entry * 100
         
+        # Sinyal timestamp: hangi zamanda olusturuldu (eski sinyalleri reddetmek icin)
+        signal_timestamp = datetime.now(timezone.utc)
+        
         return {
             'symbol': symbol, 'signal': signal, 'strength': strength,
             'leverage': leverage, 'entry': entry, 'sl': sl, 'tp': tp,
             'sl_pct': sl_pct, 'tp_pct': tp_pct, 'rsi': bar_1h['rsi'],
-            'volume': bar_1h['volume_ratio'], 'btc_trend': btc_trend
+            'volume': bar_1h['volume_ratio'], 'btc_trend': btc_trend,
+            'timestamp': signal_timestamp  # Sinyal olusturulma zamani
         }
     except Exception as e:
         logger.error(f"Hata {symbol}: {e}")
@@ -302,7 +304,7 @@ def format_message(s: dict) -> str:
 📊 *Volume:* {s['volume']:.1f}x
 ₿ *BTC:* {btc}
 
-⏱ *TF:* 1h | 🕐 {datetime.now().strftime('%H:%M')} UTC
+⏱ *TF:* 1h | 🕐 {datetime.now(timezone.utc).strftime('%H:%M')} UTC
 """
 
 
@@ -360,8 +362,9 @@ async def main():
             except Exception as e:
                 logger.error("  %s: Beklenmeyen hata: %s", futures[future], e)
 
-    # Ayni sembol + ayni yon duplicate gonderilmesin
+    # Duplicate kontrolu: ayni run icinde ayni sembol + ayni yon = duplicate
     sent_key = set()
+    
     for sig in signals:
         key = (sig['symbol'], sig['signal'])
         if key in sent_key:
@@ -375,6 +378,20 @@ async def main():
 
         if AUTO_TRADE_ENABLED:
             try:
+                # Sinyal timestamp kontrolu: 10 dakikadan eski sinyalleri reddet (güvenlik için)
+                signal_age = datetime.now(timezone.utc) - sig.get('timestamp', datetime.now(timezone.utc))
+                if signal_age.total_seconds() > 600:  # 10 dakika = 600 saniye
+                    logger.warning(
+                        "Sinyal cok eski (%d saniye), islem atlandi: %s %s — fiyat degismis olabilir.",
+                        int(signal_age.total_seconds()), sig['symbol'], sig['signal']
+                    )
+                    await send_message(
+                        "⚠️ Sinyal cok eski (%d dk), islem atlandi: %s %s" % (
+                            int(signal_age.total_seconds() / 60), sig['symbol'], sig['signal']
+                        )
+                    )
+                    continue
+                
                 from auto_trader import execute_auto_trade
                 logger.info("Otomatik trading aktif - %s islemi aciliyor...", sig['symbol'])
                 success = execute_auto_trade(sig)
@@ -393,9 +410,6 @@ async def main():
                 logger.error("Otomatik trading hatasi: %s", e)
                 await send_message("⚠️ Otomatik trading hatasi: %s" % str(e))
                 await asyncio.sleep(1)
-
-    if not signals:
-        logger.info("Sinyal bulunamadi")
 
     # TP/SL kapanis bildirimi
     try:
@@ -419,7 +433,6 @@ async def main():
     except Exception as e:
         logger.warning("Kapanis bildirimi atlandi: %s", e)
 
-    # Bos sinyal run'inda Telegram'a mesaj yollanmaz (gunluk durum mesaji kaldirildi)
     logger.info("="*40)
     logger.info("SINYAL KONTROLU BITTI | Run UTC: %s", run_utc)
     logger.info("="*40)
