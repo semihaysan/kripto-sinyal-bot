@@ -11,14 +11,20 @@ import pandas as pd
 import ccxt
 from telegram import Bot
 from telegram.error import TelegramError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 # KuCoin exchange tek sefer olusturulur (her fetch'te degil)
 _exchange = None
+_btc_trend_cache = None
+_btc_trend_cache_ts = None
 
 def _get_exchange():
     global _exchange
     if _exchange is None:
-        _exchange = ccxt.kucoin({'enableRateLimit': True})
+        _exchange = ccxt.kucoin({
+            'enableRateLimit': True,
+            'timeout': 10000,  # 10 saniye timeout per request
+        })
     return _exchange
 
 # =====================================================
@@ -113,40 +119,75 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_data(symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
-    """KuCoin'den veri cek (global exchange kullanir)."""
+    """KuCoin'den veri cek (global exchange kullanir). ThreadPoolExecutor kullanmadan direkt cek (daha hizli)."""
     try:
-        ohlcv = _get_exchange().fetch_ohlcv(symbol, timeframe, limit=limit)
+        exchange = _get_exchange()
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return df
     except Exception as e:
-        logger.error(f"Veri hatasi {symbol}: {e}")
+        logger.error("Veri hatasi %s %s: %s", symbol, timeframe, e)
         return pd.DataFrame()
 
 
 def get_btc_trend() -> int:
-    """BTC trend yonu (4h bazli). 1=up, -1=down, 0=neutral. Tek sefer cagrilir, veri bir kez cekilir."""
+    """BTC trend yonu (4h bazli). 1h boyunca cache'lenir (aynı 1h mumda aynı trend)."""
+    global _btc_trend_cache, _btc_trend_cache_ts
+    # Son kapanan 1h mum timestamp'i (workflow'daki mantikla ayni)
+    now_utc = datetime.now(timezone.utc)
+    current_1h_ts = now_utc.replace(minute=0, second=0, microsecond=0) - pd.Timedelta(hours=1)
+    
+    # Cache varsa ve ayni 1h mum ise cache'den don
+    if _btc_trend_cache is not None and _btc_trend_cache_ts == current_1h_ts:
+        return _btc_trend_cache
+    
+    # Cache yok veya farkli 1h mum - yeni cek
     try:
         df = fetch_data('BTC/USDT', TF_TREND, 100)
         if df.empty:
+            _btc_trend_cache = 0
+            _btc_trend_cache_ts = current_1h_ts
             return 0
         df = calculate_indicators(df)
         last = df.iloc[-1]
         if last['close'] > last['ema_50'] and last['macd_hist'] > 0:
-            return 1
+            trend = 1
         elif last['close'] < last['ema_50'] and last['macd_hist'] < 0:
-            return -1
-        return 0
-    except:
+            trend = -1
+        else:
+            trend = 0
+        _btc_trend_cache = trend
+        _btc_trend_cache_ts = current_1h_ts
+        return trend
+    except Exception as e:
+        logger.error("BTC trend hatasi: %s", e)
         return 0
 
 
 def check_signal(symbol: str, btc_trend: int) -> dict:
-    """Sinyal kontrol et (Optimized 1h entry)."""
+    """Sinyal kontrol et (Optimized 1h entry). 4h ve 1h verileri paralel cekilir."""
     try:
-        df_4h = fetch_data(symbol, TF_TREND, 100)    # 4h trend
-        df_1h = fetch_data(symbol, TF_ENTRY, 100)    # 1h entry ve momentum
+        # Paralel fetch: 4h ve 1h ayni anda
+        exchange = _get_exchange()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_4h = executor.submit(exchange.fetch_ohlcv, symbol, TF_TREND, 100)
+            future_1h = executor.submit(exchange.fetch_ohlcv, symbol, TF_ENTRY, 100)
+            try:
+                ohlcv_4h = future_4h.result(timeout=8)
+                ohlcv_1h = future_1h.result(timeout=8)
+            except FutureTimeoutError:
+                logger.warning("Timeout: %s veri cekilemedi", symbol)
+                return None
+        
+        df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms')
+        df_4h.set_index('timestamp', inplace=True)
+        
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_1h['timestamp'] = pd.to_datetime(df_1h['timestamp'], unit='ms')
+        df_1h.set_index('timestamp', inplace=True)
         
         if df_4h.empty or df_1h.empty:
             return None
@@ -290,14 +331,34 @@ async def main():
     btc_txt = "UP" if btc_trend == 1 else "DOWN" if btc_trend == -1 else "NEUTRAL"
     logger.info("BTC Trend: %s", btc_txt)
 
+    # Tum coin'leri paralel kontrol et (cok daha hizli)
     signals = []
-    for symbol in SYMBOLS:
-        sig = check_signal(symbol, btc_trend)
-        if sig:
-            signals.append(sig)
-            logger.info("  %s: %s (Kuvvet: %s)", symbol, sig['signal'], sig['strength'])
-        else:
-            logger.info("  %s: Sinyal yok", symbol)
+    logger.info("Paralel coin kontrolu basladi (%s coin)...", len(SYMBOLS))
+    
+
+    def check_one_symbol(sym: str):
+        try:
+            sig = check_signal(sym, btc_trend)
+            return sym, sig
+        except Exception as e:
+            logger.error("  %s: Hata: %s", sym, e)
+            return sym, None
+    
+    # Paralel: max 10 coin ayni anda (rate limit'e takilmasin)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(check_one_symbol, sym): sym for sym in SYMBOLS}
+        for future in futures:
+            try:
+                symbol, sig = future.result(timeout=20)  # Her coin max 20 saniye
+                if sig:
+                    signals.append(sig)
+                    logger.info("  %s: %s (Kuvvet: %s)", symbol, sig['signal'], sig['strength'])
+                else:
+                    logger.info("  %s: Sinyal yok", symbol)
+            except FutureTimeoutError:
+                logger.warning("  %s: Timeout (20s asildi), atlandi", futures[future])
+            except Exception as e:
+                logger.error("  %s: Beklenmeyen hata: %s", futures[future], e)
 
     # Ayni sembol + ayni yon duplicate gonderilmesin
     sent_key = set()
