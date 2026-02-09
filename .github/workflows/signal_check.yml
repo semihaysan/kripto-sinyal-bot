@@ -5,10 +5,10 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
-# Ayni anda tek run: onceki bitmeden yeni baslamasin (araliklarin uzamasin)
+# Ayni anda tek run: yeni baslarsa onceki iptal et (araliklar duzenli kalsin)
 concurrency:
   group: signal-check
-  cancel-in-progress: false  # false = onceki bitene kadar bekle, yeni iptal etme
+  cancel-in-progress: true  # true = yeni baslarsa onceki iptal et (1.5 saat beklemesin)
 
 jobs:
   check-signals:
@@ -28,33 +28,9 @@ jobs:
       run: |
         pip install ccxt pandas python-telegram-bot
 
-    - name: Son 1h mum timestamp (atla kontrolu)
-      id: last_1h
+    - name: Calisma Zamani (UTC)
       run: |
-        echo "ts=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:00:00Z)" >> $GITHUB_OUTPUT
-        echo "Run UTC: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
-
-    - name: Cache son 1h timestamp
-      uses: actions/cache/restore@v4
-      id: cache_1h
-      with:
-        path: .signal_check_cache
-        key: signal-check-last-1h
-
-    - name: Ayni 1h mum mu?
-      id: skip_run
-      run: |
-        if [ -f .signal_check_cache/last_1h_ts ]; then
-          PREV=$(cat .signal_check_cache/last_1h_ts)
-          if [ "$PREV" = "${{ steps.last_1h.outputs.ts }}" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Ayni 1h mum, sinyal kontrolu atlaniyor."
-            exit 0
-          fi
-        fi
-        echo "skip=false" >> $GITHUB_OUTPUT
-        mkdir -p .signal_check_cache
-        echo "${{ steps.last_1h.outputs.ts }}" > .signal_check_cache/last_1h_ts
+        echo "Workflow basladi: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
 
     - name: Telegram Test (Bot Calisma Kontrolu)
       if: github.event_name == 'workflow_dispatch'
@@ -65,7 +41,6 @@ jobs:
         python test_telegram.py
 
     - name: Sinyal Kontrol
-      if: steps.skip_run.outputs.skip != 'true'
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -79,9 +54,3 @@ jobs:
       run: |
         python telegram_bot_github.py
 
-    - name: Cache 1h timestamp kaydet
-      if: steps.skip_run.outputs.skip != 'true' && success()
-      uses: actions/cache/save@v4
-      with:
-        path: .signal_check_cache
-        key: signal-check-last-1h
