@@ -78,6 +78,52 @@ class AutoTrader:
             logger.error(f"Bakiye hatası: {e}")
             return 0.0
 
+    def get_total_used_margin(self) -> float:
+        """Tum acik pozisyonlarin toplam kullanilan margin'ini hesapla."""
+        try:
+            positions = self.exchange.fetch_positions() or []
+            total_margin = 0.0
+            for p in positions:
+                contracts = float(p.get('contracts') or p.get('contractSize') or 0)
+                if contracts == 0:
+                    continue
+                # Margin = notional / leverage
+                notional = float(p.get('notional') or 0)
+                leverage = float(p.get('leverage') or FIXED_LEVERAGE)
+                if leverage > 0:
+                    margin = abs(notional) / leverage
+                    total_margin += margin
+            logger.info(f"Toplam kullanilan margin: ${total_margin:.2f}")
+            return total_margin
+        except Exception as e:
+            logger.warning(f"Toplam margin hesaplama hatasi: {e}")
+            return 0.0
+
+    def close_position(self, symbol: str) -> bool:
+        """Acil durum: pozisyonu kapat (SL/TP basarisiz olursa)."""
+        fsym = _to_futures_symbol(symbol)
+        try:
+            positions = self.exchange.fetch_positions() or []
+            for p in positions:
+                if _to_futures_symbol(p.get('symbol', '') or '') != fsym:
+                    continue
+                contracts = float(p.get('contracts') or 0)
+                if contracts == 0:
+                    continue
+                # LONG pozisyon: contracts > 0, kapatmak icin SELL
+                # SHORT pozisyon: contracts < 0, kapatmak icin BUY
+                close_side = 'sell' if contracts > 0 else 'buy'
+                close_amount = abs(contracts)
+                logger.warning(f"ACIL DURUM: {symbol} pozisyonu kapatiliyor (SL/TP basarisiz) - {close_amount} kontrat")
+                self.exchange.create_market_order(fsym, close_side, close_amount, params={'reduceOnly': True})
+                logger.info(f"Pozisyon kapatildi: {symbol}")
+                return True
+            logger.warning(f"Kapatilacak pozisyon bulunamadi: {symbol}")
+            return False
+        except Exception as e:
+            logger.error(f"Pozisyon kapatma hatasi {symbol}: {e}")
+            return False
+
     def has_open_position(self, symbol: str) -> bool:
         """Aynı sembolde açık pozisyon var mı?"""
         fsym = _to_futures_symbol(symbol)
@@ -117,21 +163,29 @@ class AutoTrader:
 
     def _place_stop_order(
         self, symbol: str, side: str, amount: float, stop_price: float,
-        reduce_only: bool = True, order_type: str = 'stop_market'
+        reduce_only: bool = True, order_type: str = 'stop_market', max_retries: int = 3
     ) -> bool:
-        """Tek bir stop/trigger emri (SL veya TP için). KuCoin: stopPrice + triggerPrice."""
+        """Tek bir stop/trigger emri (SL veya TP için). Retry mekanizmasi ile."""
         fsym = _to_futures_symbol(symbol)
-        try:
-            params = {
-                'reduceOnly': reduce_only,
-                'stopPrice': stop_price,
-                'triggerPrice': stop_price,
-            }
-            self.exchange.create_order(fsym, order_type, side, amount, None, params=params)
-            return True
-        except Exception as e:
-            logger.warning(f"Stop emir hatası (SL/TP) {symbol}: {e}")
-            return False
+        for attempt in range(max_retries):
+            try:
+                params = {
+                    'reduceOnly': reduce_only,
+                    'stopPrice': stop_price,
+                    'triggerPrice': stop_price,
+                }
+                self.exchange.create_order(fsym, order_type, side, amount, None, params=params)
+                logger.info(f"Stop emir basarili: {symbol} @ ${stop_price:.4f}")
+                return True
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Stop emir hatasi (deneme {attempt+1}/{max_retries}): {symbol} - {e}, tekrar deneniyor...")
+                    import time
+                    time.sleep(1)  # 1 saniye bekle
+                else:
+                    logger.error(f"Stop emir BASARISIZ ({max_retries} deneme): {symbol} @ ${stop_price:.4f} - {e}")
+                    return False
+        return False
 
     def place_order(
         self,
@@ -170,10 +224,18 @@ class AutoTrader:
             # SL ve TP ayrı ayrı (KuCoin/ccxt aynı create_order’da ikisini kabul etmiyor)
             ok_sl = self._place_stop_order(symbol, close_side, quantity, stop_loss, reduce_only=True)
             ok_tp = self._place_stop_order(symbol, close_side, quantity, take_profit, reduce_only=True)
-            if not ok_sl:
-                logger.warning(f"SL emri verilemedi: SL={stop_loss:.4f} — manuel kapatma gerekebilir.")
-            if not ok_tp:
-                logger.warning(f"TP emri verilemedi: TP={take_profit:.4f} — manuel kapatma gerekebilir.")
+            
+            # KRITIK: SL veya TP basarisiz olursa pozisyon korumasiz kalir - acil durum!
+            if not ok_sl or not ok_tp:
+                logger.error(f"KRITIK HATA: SL veya TP emri basarisiz! SL={ok_sl}, TP={ok_tp}")
+                logger.error(f"Pozisyon korumasiz kaldi: {symbol} {side} — ACIL DURUM: Pozisyon kapatiliyor!")
+                # Acil durum: Pozisyonu kapat (SL/TP olmadan acik kalmamali)
+                if self.close_position(symbol):
+                    logger.error(f"Pozisyon acil durumda kapatildi: {symbol}")
+                    return None  # Basarisiz sayilir
+                else:
+                    logger.error(f"Pozisyon kapatilamadi: {symbol} — MANUEL MUDAHALE GEREKLI!")
+                    return None
 
             return {
                 'order_id': order.get('id'),
@@ -228,9 +290,22 @@ class AutoTrader:
 
         # Margin rezervasyonu: gerekli margin kullanilabilir bakiyeyi asmasin (backtest ile uyumlu)
         required_margin = quantity * entry / leverage
+        
+        # Toplam margin kontrolu: tum acik pozisyonlar + yeni pozisyon
+        total_used_margin = self.get_total_used_margin()
+        total_after = total_used_margin + required_margin
+        max_margin_usage = effective_balance * 0.8  # Max %80 margin kullanimi (güvenlik için %20 buffer)
+        
         if required_margin > effective_balance:
             logger.warning(
                 f"Yetersiz margin: {symbol} — gerekli ${required_margin:.2f}, kullanilabilir ${effective_balance:.2f}. Islem atlandi."
+            )
+            return False
+        
+        if total_after > max_margin_usage:
+            logger.warning(
+                f"Toplam margin limiti asildi: {symbol} — mevcut ${total_used_margin:.2f}, "
+                f"yeni ${required_margin:.2f}, toplam ${total_after:.2f}, limit ${max_margin_usage:.2f}. Islem atlandi."
             )
             return False
 
@@ -284,7 +359,7 @@ def get_recent_position_closes(symbols: List[str]) -> List[Dict]:
             except (TypeError, ValueError):
                 stop_price = None
             side = 'LONG' if (o.get('side') or '').lower() == 'sell' else 'SHORT'
-            # SL vs TP: 1) Entry varsa tetik vs entry. 2) Yoksa tetik vs işlem: LONG'da TP => işlem>=tetik, SL => işlem<=tetik; SHORT'da TP => işlem<=tetik, SL => işlem>=tetik.
+            # SL vs TP belirleme: Entry varsa tetik vs entry karşılaştırılır, yoksa tetik vs işlem fiyatı
             entry_raw = info.get('entryPrice') or info.get('avgEntryPrice') or info.get('entry') or o.get('entryPrice')
             try:
                 entry = float(entry_raw) if entry_raw is not None else None
