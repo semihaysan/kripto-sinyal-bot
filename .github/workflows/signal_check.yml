@@ -5,9 +5,15 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+# Ayni anda tek run: onceki bitmeden yeni baslamasin (araliklarin uzamasin)
+concurrency:
+  group: signal-check
+  cancel-in-progress: false  # false = onceki bitene kadar bekle, yeni iptal etme
+
 jobs:
   check-signals:
     runs-on: ubuntu-latest
+    timeout-minutes: 5  # Max 5 dakika, sonra iptal (10+ dk sürmesin)
 
     steps:
     - name: Checkout
