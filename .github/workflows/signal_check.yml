@@ -12,8 +12,9 @@ concurrency:
 
 jobs:
   check-signals:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5  # Max 5 dakika, sonra iptal (10+ dk sürmesin)
+    # Self-hosted runner: kendi bilgisayarinda calisir, 30 dk'da bir garantili tetiklenir (GitHub kuyrugu yok)
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 5
 
     steps:
     - name: Checkout
@@ -25,32 +26,28 @@ jobs:
         python-version: '3.11'
 
     - name: Kutuphaneleri Kur
-      run: |
-        pip install ccxt pandas python-telegram-bot
+      run: pip install ccxt pandas python-telegram-bot
 
     - name: Calisma Zamani (UTC)
       run: |
-        echo "Workflow basladi: $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+        echo "Workflow basladi: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') UTC"
 
     - name: Telegram Test (Bot Calisma Kontrolu)
       if: github.event_name == 'workflow_dispatch'
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        python test_telegram.py
+      run: python test_telegram.py
 
     - name: Sinyal Kontrol
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        # Otomatik trade (KuCoin Futures) — sadece AUTO_TRADE_ENABLED=true ve API bilgileri dolu ise işlem açar
         KUCOIN_API_KEY: ${{ secrets.KUCOIN_API_KEY }}
         KUCOIN_API_SECRET: ${{ secrets.KUCOIN_API_SECRET }}
         KUCOIN_API_PASSPHRASE: ${{ secrets.KUCOIN_API_PASSPHRASE }}
         KUCOIN_SANDBOX: ${{ secrets.KUCOIN_SANDBOX }}
         AUTO_TRADE_ENABLED: ${{ secrets.AUTO_TRADE_ENABLED }}
         AUTO_TRADE_DRY_RUN: ${{ secrets.AUTO_TRADE_DRY_RUN }}
-      run: |
-        python telegram_bot_github.py
+      run: python telegram_bot_github.py
 
