@@ -20,6 +20,9 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: PowerShell script izni (setup-python icin gerekli)
+      run: Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+
     - name: Python Kur
       uses: actions/setup-python@v5
       with:
