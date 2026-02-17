@@ -1,8 +1,6 @@
 name: Kripto Sinyal Kontrolu
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 # Ayni anda tek run: yeni baslarsa onceki iptal et (araliklar duzenli kalsin)
